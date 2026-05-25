@@ -1,0 +1,66 @@
+# Do live API call to perform system evaluation (Evals). Typically manually
+# triggered after changes to the part of code that affects the LLM behavior.
+# Supports 2 kinds of eval markers:
+#   "dev_eval"   -> frequent dev-dataset evals
+#   "held_out"   -> pre-release hidden held-out evals
+#
+name: Evals
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      marker:
+        description: Which evals to run.
+        required: false
+        type: choice
+        default: "dev_eval"
+        options:
+          - "dev_eval"
+          - "held_out"
+      test_filter:
+        description: Optional pytest -k expression to run a subset.
+        required: false
+        default: ""
+
+jobs:
+  gated-tests:
+    name: Run gated tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: prefix-dev/setup-pixi@1b2de7f3351f171c8b4dfeb558c639cb58ed4ec0 # v0.9.5
+        with:
+          pixi-version: v0.68.1
+          locked: true
+          cache: true
+          cache-write: false
+          environments: pdev
+
+      - name: Run gated tests
+        env:
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_VERSION: ${{ secrets.AZURE_OPENAI_VERSION }}
+          MARKER: ${{ inputs.marker }}
+          TEST_FILTER: ${{ inputs.test_filter }}
+        run: |
+          pixi reinstall -e pdev INFRA-COMPASS
+
+          args=(-rapP -vv -s --log-cli-level=INFO -m "${MARKER}")
+          if [ -n "${TEST_FILTER}" ]; then
+            args+=(-k "${TEST_FILTER}")
+          fi
+          args+=(tests/python/evals)
+
+          echo "Running: pytest ${args[*]}"
+          pixi run -e pdev pytest "${args[@]}"
